@@ -39,7 +39,9 @@ if [ ! -f "$SKILL" ]; then
   curl -fsSL "https://raw.githubusercontent.com/lovartai/lovart-skill/main/skills/lovart-skill/agent_skill.py" -o "$SKILL" \
     || { echo "ERROR: could not download agent_skill.py from lovartai/lovart-skill."; exit 1; }
 fi
-set -a; [ -f "$HOME/.openclaw/.env" ] && . "$HOME/.openclaw/.env"; set +a
+set -a
+[ -f "$HOME/.openclaw/.env" ] && . "$HOME/.openclaw/.env"
+set +a
 if [ -z "$LOVART_ACCESS_KEY" ] || [ -z "$LOVART_SECRET_KEY" ]; then
   echo "ERROR: LOVART_ACCESS_KEY / LOVART_SECRET_KEY not set (expected in ~/.openclaw/.env or shell env)."
   exit 1
@@ -57,21 +59,29 @@ For each `--ref` local file, upload it to Lovart's CDN and capture the URL:
 python3 "$SKILL" upload --file "<ref_path>"
 ```
 
-Read the `url` field from the JSON response. Collect every URL into a list.
-If there are no `--ref` args, skip this step.
+`upload` prints JSON `{"url": "<cdn-url>"}` to stdout — read the top-level
+`url` key. Collect every URL into the `CDN_URLS` bash array (used in Step 3).
+If there are no `--ref` args, skip this step and leave `CDN_URLS` empty.
+
+If an `upload` call exits non-zero or returns no `url`, STOP and report the
+error — do not continue to generation.
 
 ### Step 3 — Generate
 
+`--attachments` is a single flag that takes one or more URL values. Build the
+argument list with a bash array so it is space-safe and absent when there are
+no references:
+
 ```bash
 WORKDIR=$(mktemp -d /tmp/lovart-video.XXXXXX)
-python3 "$SKILL" chat \
-  --prompt "<prompt text>" \
-  --mode "<mode>" \
-  --attachments <url1> <url2> \
-  --json --download --output-dir "$WORKDIR"
+ATTACH=()
+[ ${#CDN_URLS[@]} -gt 0 ] && ATTACH=(--attachments "${CDN_URLS[@]}")
+python3 "$SKILL" chat --prompt "$PROMPT" --mode "$MODE" "${ATTACH[@]}" --json --download --output-dir "$WORKDIR"
 ```
 
-Omit `--attachments` entirely when there are no references. Add
+`$PROMPT` is the caller's `--prompt` text and `$MODE` is the resolved
+`--mode` value. `ATTACH` expands to one `--attachments` flag followed by every
+URL in `CDN_URLS`, or to nothing when `CDN_URLS` is empty. Add
 `--prefer-models '<json>'` only if the caller passed it. `chat` sends the
 prompt, waits for completion, and downloads artifacts into `--output-dir`.
 
@@ -85,6 +95,8 @@ Lovart is waiting for cost approval:
    ```bash
    python3 "$SKILL" confirm --thread-id "<thread_id>" --json
    ```
+   Inspect the `confirm` response JSON; if it indicates failure, STOP and
+   report it rather than calling `result`.
 3. Retrieve the finished result:
    ```bash
    python3 "$SKILL" result --thread-id "<thread_id>" --json --download --output-dir "$WORKDIR"
@@ -95,16 +107,19 @@ Lovart is waiting for cost approval:
 From the final JSON payload:
 - Verify `generation_succeeded` is `true`. If not, print the error and exit
   non-zero — never print a fake path.
-- Take the first downloaded video artifact at `downloaded[0].local_path`.
+- Set `DOWNLOADED` to the first downloaded video artifact's
+  `downloaded[0].local_path`.
+- Set `OUT` to the caller's resolved `--out` value, defaulting to
+  `/tmp/lovart-video/<timestamp>.mp4` when `--out` was not given.
 
 ```bash
-mkdir -p "$(dirname "<out_path>")"
-mv "<downloaded_local_path>" "<out_path>"
-echo "<out_path>"
+mkdir -p "$(dirname "$OUT")"
+mv "$DOWNLOADED" "$OUT"
+echo "$OUT"
 ```
 
-Print the absolute output path on the LAST line of your response so callers
-can capture it.
+Print the absolute output path (`$OUT`) on the LAST line of your response so
+callers can capture it.
 
 ## Notes
 

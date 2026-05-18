@@ -15,7 +15,8 @@ posts, so any skill that needs an AI-generated video can call it.
 
 ## Install
 
-Symlink the skill into your Claude Code commands directory:
+Symlink the skill into your Claude Code commands directory. Run this command
+from the repo root — it uses `$(pwd)` to resolve the skill's absolute path:
 
 ```bash
 ln -sf "$(pwd)/lovart-video.md" ~/.claude/commands/lovart-video.md
