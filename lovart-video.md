@@ -1,0 +1,114 @@
+# /lovart-video
+
+Generate a video from a text prompt (and optional reference images) using the
+Lovart AI agent. Prints the path to a finished video file.
+
+This is a low-level building block — it knows nothing about products, stores,
+or social posts. Other skills call it for their video step.
+
+## Usage
+
+```
+/lovart-video --prompt "<description>" [--ref <path>]... [--out <path>] [--mode fast|thinking] [--prefer-models '<json>']
+```
+
+| Arg | Required | Default | Meaning |
+|-----|----------|---------|---------|
+| `--prompt` | yes | — | Video description. State duration and aspect ratio here in plain words (Lovart has no flags for them), e.g. "8-second vertical 9:16 clip". |
+| `--ref` | no | — | Local image/video reference file. Repeatable. Uploaded to Lovart's CDN, then passed as an attachment. |
+| `--out` | no | `/tmp/lovart-video/<timestamp>.mp4` | Destination path for the finished video. |
+| `--mode` | no | `fast` | Lovart reasoning depth: `fast` or `thinking`. |
+| `--prefer-models` | no | — | JSON soft model preference, e.g. `{"VIDEO":["generate_video_kling_v3"]}`. |
+
+## How it works
+
+The Lovart agent ships as one self-contained Python CLI, `agent_skill.py`, in
+the `lovartai/lovart-skill` GitHub repo. The `npx skills add` installer does
+not copy that script, so this skill bootstraps it directly into a local cache.
+
+## Workflow
+
+### Step 1 — Preflight
+
+```bash
+CACHE="$HOME/.cache/lovart-video"
+SKILL="$CACHE/agent_skill.py"
+mkdir -p "$CACHE"
+if [ ! -f "$SKILL" ]; then
+  echo "Fetching Lovart agent_skill.py ..."
+  curl -fsSL "https://raw.githubusercontent.com/lovartai/lovart-skill/main/skills/lovart-skill/agent_skill.py" -o "$SKILL" \
+    || { echo "ERROR: could not download agent_skill.py from lovartai/lovart-skill."; exit 1; }
+fi
+set -a; [ -f "$HOME/.openclaw/.env" ] && . "$HOME/.openclaw/.env"; set +a
+if [ -z "$LOVART_ACCESS_KEY" ] || [ -z "$LOVART_SECRET_KEY" ]; then
+  echo "ERROR: LOVART_ACCESS_KEY / LOVART_SECRET_KEY not set (expected in ~/.openclaw/.env or shell env)."
+  exit 1
+fi
+```
+
+If preflight fails, STOP and tell the user which prerequisite is missing. Do
+not attempt generation.
+
+### Step 2 — Upload references
+
+For each `--ref` local file, upload it to Lovart's CDN and capture the URL:
+
+```bash
+python3 "$SKILL" upload --file "<ref_path>"
+```
+
+Read the `url` field from the JSON response. Collect every URL into a list.
+If there are no `--ref` args, skip this step.
+
+### Step 3 — Generate
+
+```bash
+WORKDIR=$(mktemp -d /tmp/lovart-video.XXXXXX)
+python3 "$SKILL" chat \
+  --prompt "<prompt text>" \
+  --mode "<mode>" \
+  --attachments <url1> <url2> \
+  --json --download --output-dir "$WORKDIR"
+```
+
+Omit `--attachments` entirely when there are no references. Add
+`--prefer-models '<json>'` only if the caller passed it. `chat` sends the
+prompt, waits for completion, and downloads artifacts into `--output-dir`.
+
+### Step 4 — Confirm high-cost operations
+
+If the Step 3 JSON has `final_status` equal to `"pending_confirmation"`,
+Lovart is waiting for cost approval:
+
+1. Report the cost figure from the response to the user.
+2. Confirm (the user invoked `/lovart-video` intentionally):
+   ```bash
+   python3 "$SKILL" confirm --thread-id "<thread_id>" --json
+   ```
+3. Retrieve the finished result:
+   ```bash
+   python3 "$SKILL" result --thread-id "<thread_id>" --json --download --output-dir "$WORKDIR"
+   ```
+
+### Step 5 — Resolve the output file
+
+From the final JSON payload:
+- Verify `generation_succeeded` is `true`. If not, print the error and exit
+  non-zero — never print a fake path.
+- Take the first downloaded video artifact at `downloaded[0].local_path`.
+
+```bash
+mkdir -p "$(dirname "<out_path>")"
+mv "<downloaded_local_path>" "<out_path>"
+echo "<out_path>"
+```
+
+Print the absolute output path on the LAST line of your response so callers
+can capture it.
+
+## Notes
+
+- Duration and aspect ratio must be in the `--prompt` text — there are no flags.
+- Credentials live in `~/.openclaw/.env` (`LOVART_ACCESS_KEY`, `LOVART_SECRET_KEY`).
+- `agent_skill.py` is cached at `~/.cache/lovart-video/`; delete it to force a refresh.
+- Each `chat` call may incur Lovart cost; the `confirm` gate surfaces the figure.
