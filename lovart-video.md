@@ -9,7 +9,7 @@ or social posts. Other skills call it for their video step.
 ## Usage
 
 ```
-/lovart-video --prompt "<description>" [--ref <path>]... [--out <path>] [--mode fast|thinking] [--prefer-models '<json>']
+/lovart-video --prompt "<description>" [--ref <path>]... [--out <path>] [--mode fast|thinking] [--prefer-models '<json>'] [--project-id <id>]
 ```
 
 | Arg | Required | Default | Meaning |
@@ -19,6 +19,7 @@ or social posts. Other skills call it for their video step.
 | `--out` | no | `/tmp/lovart-video/<timestamp>.mp4` | Destination path for the finished video. |
 | `--mode` | no | `fast` | Lovart reasoning depth: `fast` or `thinking`. |
 | `--prefer-models` | no | — | JSON soft model preference, e.g. `{"VIDEO":["generate_video_kling_v3"]}`. |
+| `--project-id` | no | — | Run the `chat` inside a specific Lovart project (so the generation lands in that project's workspace and history). |
 
 ## How it works
 
@@ -76,13 +77,17 @@ no references:
 WORKDIR=$(mktemp -d /tmp/lovart-video.XXXXXX)
 ATTACH=()
 [ ${#CDN_URLS[@]} -gt 0 ] && ATTACH=(--attachments "${CDN_URLS[@]}")
-python3 "$SKILL" chat --prompt "$PROMPT" --mode "$MODE" "${ATTACH[@]}" --json --download --output-dir "$WORKDIR"
+EXTRA=()
+[ -n "$PREFER_MODELS" ] && EXTRA+=(--prefer-models "$PREFER_MODELS")
+[ -n "$PROJECT_ID" ] && EXTRA+=(--project-id "$PROJECT_ID")
+python3 "$SKILL" chat --prompt "$PROMPT" --mode "$MODE" "${ATTACH[@]}" "${EXTRA[@]}" --json --download --output-dir "$WORKDIR"
 ```
 
 `$PROMPT` is the caller's `--prompt` text and `$MODE` is the resolved
 `--mode` value. `ATTACH` expands to one `--attachments` flag followed by every
-URL in `CDN_URLS`, or to nothing when `CDN_URLS` is empty. Add
-`--prefer-models '<json>'` only if the caller passed it. `chat` sends the
+URL in `CDN_URLS`, or to nothing when `CDN_URLS` is empty. `EXTRA` carries
+`--prefer-models` and `--project-id` only when the caller passed them
+(`$PREFER_MODELS` / `$PROJECT_ID`); each is omitted otherwise. `chat` sends the
 prompt, waits for completion, and downloads artifacts into `--output-dir`.
 
 ### Step 4 — Confirm high-cost operations
